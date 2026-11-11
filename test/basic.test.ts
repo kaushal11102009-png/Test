@@ -1,26 +1,32 @@
 import { describe, expect, it } from 'vitest';
-import { parseQuestionsFromText } from './src/core/parser';
-import { scoreAttempt } from './src/core/scoring';
+import { parseQuestionsFromText } from '../src/core/parser';
+import { scoreAttempt } from '../src/core/scoring';
 
-describe('Mission Test text parser', () => {
-  it('creates questions and options from textual input', () => {
-    const input = `Q1: 2 + 2 = ?\nA. 3\nB. 4\nC. 5\nD. 6`;
-    const questions = parseQuestionsFromText(input);
-    expect(questions.length).toBeGreaterThan(0);
-    expect(questions[0].options.length).toBe(4);
-    expect(questions[0].prompt).toContain('2 + 2');
+describe('question text parser', () => {
+  it('parses numbered questions and options without guessing the answer key', () => {
+    const questions = parseQuestionsFromText('Q1: 2 + 2 = ?\nA. 3\nB. 4\nC. 5\nD. 6');
+    expect(questions).toHaveLength(1);
+    expect(questions[0].prompt).toBe('2 + 2 = ?');
+    expect(questions[0].options).toEqual(['3', '4', '5', '6']);
+    expect(questions[0].correctIndex).toBeNull();
+  });
+
+  it('reads an explicitly marked answer', () => {
+    const [question] = parseQuestionsFromText('1. Choose B\nA. first\nB. second\nAnswer: B');
+    expect(question.correctIndex).toBe(1);
+  });
+
+  it('handles a question with no numbering', () => {
+    const [question] = parseQuestionsFromText('Capital of India?\nA) Delhi\nB) Mumbai');
+    expect(question.prompt).toBe('Capital of India?');
+    expect(question.options[0]).toBe('Delhi');
+    expect(question.options[1]).toBe('Mumbai');
   });
 });
 
-describe('Mission Test scoring', () => {
-  it('awards one mark for correct teacher answers', () => {
-    const questions = [
-      { id: 'q1', prompt: '2 + 2 = ?', options: ['3', '4', '5', '6'], correctIndex: 1, explanation: '', source: 'manual' as const }
-    ];
-    const answers = { q1: 1 };
-    const key = { q1: 1 };
-    const result = scoreAttempt(questions, answers, key);
-    expect(result.score).toBe(1);
-    expect(result.total).toBe(1);
+describe('attempt scoring', () => {
+  it('scores only questions with an answer key', () => {
+    const questions = [{ id: 'one' }, { id: 'two' }];
+    expect(scoreAttempt(questions, { one: 1, two: 0 }, { one: 1 })).toEqual({ score: 1, total: 1, questionCount: 2 });
   });
 });
