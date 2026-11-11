@@ -1,330 +1,135 @@
 import { useEffect, useMemo, useState } from 'react';
-import { getAllTests, saveAttempt, saveTest } from './db';
 import { parseQuestionsFromText } from './core/parser';
 import { scoreAttempt } from './core/scoring';
-import { generateResultCode } from './core/resultCode';
-import { AttemptRecord, Question, TestRecord } from './types';
 
-const emptyQuestion = (): Question => ({
-  id: crypto.randomUUID(),
-  prompt: '',
-  options: ['', '', '', ''],
-  correctIndex: 0,
-  explanation: '',
-  source: 'manual',
-});
+type Question = {
+  id: string;
+  prompt: string;
+  options: string[];
+  correctIndex: number;
+  explanation: string;
+  source: 'paste';
+};
 
-const blankTest = (): TestRecord => ({
-  id: crypto.randomUUID(),
-  title: 'Untitled Test',
-  language: 'en',
-  timeLimitMinutes: 30,
-  questions: [emptyQuestion()],
-  answerKey: {},
-  createdAt: Date.now(),
-  updatedAt: Date.now(),
-});
+const sampleInput = `Q1: 2 + 2 = ?\nA. 3\nB. 4\nC. 5\nD. 6\n\nQ2: Capital of India?\nA. Delhi\nB. Mumbai\nC. Kolkata\nD. Jaipur`;
 
-function App() {
-  const [mode, setMode] = useState<'teacher' | 'student'>('teacher');
-  const [draft, setDraft] = useState<TestRecord>(blankTest());
-  const [savedTests, setSavedTests] = useState<TestRecord[]>([]);
-  const [selectedTestId, setSelectedTestId] = useState<string>('');
-  const [studentName, setStudentName] = useState('');
-  const [studentAnswers, setStudentAnswers] = useState<Record<string, number>>({});
-  const [rawInput, setRawInput] = useState('');
-  const [result, setResult] = useState<{ score: number; total: number; code: string } | null>(null);
+const defaultQuestions: Question[] = parseQuestionsFromText(sampleInput);
 
-  const refreshTests = async () => {
-    const tests = await getAllTests();
-    setSavedTests(tests);
-    if (tests.length > 0 && !selectedTestId) {
-      setSelectedTestId(tests[0].id);
-      setDraft(tests[0]);
+export default function App() {
+  const [questions, setQuestions] = useState<Question[]>(() => {
+    const saved = localStorage.getItem('mission-test-questions');
+    if (!saved) return defaultQuestions;
+    try {
+      return JSON.parse(saved) as Question[];
+    } catch {
+      return defaultQuestions;
+    }
+  });
+  const [draftInput, setDraftInput] = useState(sampleInput);
+  const [answers, setAnswers] = useState<Record<string, number>>({});
+  const [result, setResult] = useState<{ score: number; total: number } | null>(null);
+
+  useEffect(() => {
+    localStorage.setItem('mission-test-questions', JSON.stringify(questions));
+  }, [questions]);
+
+  const answerKey = useMemo(
+    () => Object.fromEntries(questions.map((question) => [question.id, question.correctIndex])),
+    [questions]
+  );
+
+  const handleImport = () => {
+    const parsed = parseQuestionsFromText(draftInput);
+    if (parsed.length > 0) {
+      setQuestions(parsed);
+      setAnswers({});
+      setResult(null);
     }
   };
 
-  useEffect(() => {
-    void refreshTests();
-  }, []);
-
-  const addQuestion = () => {
-    setDraft((current) => ({
-      ...current,
-      questions: [...current.questions, emptyQuestion()],
-      updatedAt: Date.now(),
-    }));
+  const handleAnswerChange = (questionId: string, answerIndex: number) => {
+    setAnswers((current) => ({ ...current, [questionId]: answerIndex }));
   };
 
-  const updateQuestion = (index: number, field: keyof Question, value: string | number | string[]) => {
-    setDraft((current) => {
-      const next = [...current.questions];
-      next[index] = {
-        ...next[index],
-        [field]: value,
-      } as Question;
-      return { ...current, questions: next, updatedAt: Date.now() };
-    });
+  const handleSubmit = () => {
+    const nextResult = scoreAttempt(questions, answers, answerKey);
+    setResult(nextResult);
   };
-
-  const updateOption = (questionIndex: number, optionIndex: number, value: string) => {
-    setDraft((current) => {
-      const nextQuestions = [...current.questions];
-      const options = [...(nextQuestions[questionIndex]?.options ?? [])];
-      options[optionIndex] = value;
-      nextQuestions[questionIndex] = {
-        ...nextQuestions[questionIndex],
-        options,
-      };
-      return { ...current, questions: nextQuestions, updatedAt: Date.now() };
-    });
-  };
-
-  const importText = () => {
-    const parsed = parseQuestionsFromText(rawInput);
-    if (!parsed.length) return;
-    setDraft((current) => ({
-      ...current,
-      questions: parsed,
-      updatedAt: Date.now(),
-    }));
-  };
-
-  const saveDraft = async () => {
-    const finalDraft = {
-      ...draft,
-      answerKey: Object.fromEntries(draft.questions.map((q) => [q.id, q.correctIndex])),
-      updatedAt: Date.now(),
-    };
-    await saveTest(finalDraft);
-    await refreshTests();
-    setSelectedTestId(finalDraft.id);
-  };
-
-  const submitExam = async () => {
-    const selected = savedTests.find((test) => test.id === selectedTestId) ?? draft;
-    const score = scoreAttempt(selected.questions, studentAnswers, selected.answerKey || {});
-    const code = generateResultCode(score.score, score.total, studentName || 'student');
-    const attemptRecord: AttemptRecord = {
-      id: crypto.randomUUID(),
-      testId: selected.id,
-      studentName: studentName || 'Student',
-      answers: studentAnswers,
-      score,
-      code,
-      createdAt: Date.now(),
-    };
-    await saveAttempt(attemptRecord);
-    setResult({ score: score.score, total: score.total, code });
-  };
-
-  const summaryText = useMemo(
-    () => `${draft.questions.length} questions · ${draft.questions.filter((q) => q.prompt.trim()).length} ready`,
-    [draft.questions]
-  );
 
   return (
     <div className="app-shell">
       <header className="topbar">
         <div>
           <p className="eyebrow">Mission Test</p>
-          <h1>Teacher + Student Workflow</h1>
-        </div>
-        <div className="segmented">
-          <button className={mode === 'teacher' ? 'active' : ''} onClick={() => setMode('teacher')}>
-            Teacher
-          </button>
-          <button className={mode === 'student' ? 'active' : ''} onClick={() => setMode('student')}>
-            Student
-          </button>
+          <h1>Teacher & Student workflow</h1>
         </div>
       </header>
 
-      {mode === 'teacher' ? (
-        <main className="layout two-col">
-          <section className="panel">
-            <h2>New Test Wizard</h2>
-            <label>
-              Test title
-              <input
-                value={draft.title}
-                onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))}
-              />
-            </label>
+      <main className="grid-layout">
+        <section className="panel">
+          <h2>Teacher import</h2>
+          <textarea
+            value={draftInput}
+            onChange={(event) => setDraftInput(event.target.value)}
+            rows={12}
+            placeholder="Paste questions here..."
+          />
+          <button onClick={handleImport}>Import questions</button>
 
-            <label>
-              Time limit (minutes)
-              <input
-                type="number"
-                value={draft.timeLimitMinutes}
-                onChange={(event) =>
-                  setDraft((current) => ({ ...current, timeLimitMinutes: Number(event.target.value) || 30 }))
-                }
-              />
-            </label>
-
-            <div className="section-block">
-              <h3>Import text</h3>
-              <textarea
-                rows={6}
-                value={rawInput}
-                onChange={(event) => setRawInput(event.target.value)}
-                placeholder="Q1: 2 + 2 = ?\nA. 3\nB. 4\nC. 5\nD. 6"
-              />
-              <div className="inline-actions">
-                <button onClick={importText}>Parse questions</button>
-                <button className="secondary" onClick={addQuestion}>Add blank question</button>
-              </div>
-            </div>
-
-            <div className="summary-row">
-              <span>{summaryText}</span>
-              <button onClick={saveDraft}>Save draft</button>
-            </div>
-
-            {draft.questions.map((question, index) => (
-              <div className="question-card" key={question.id}>
-                <div className="question-header">
-                  <strong>Question {index + 1}</strong>
-                  <select
-                    value={question.correctIndex}
-                    onChange={(event) => updateQuestion(index, 'correctIndex', Number(event.target.value))}
-                  >
-                    {question.options.map((_, optionIndex) => (
-                      <option key={optionIndex} value={optionIndex}>Correct option {optionIndex + 1}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <textarea
-                  rows={3}
-                  value={question.prompt}
-                  onChange={(event) => updateQuestion(index, 'prompt', event.target.value)}
-                  placeholder="Question text"
-                />
-
-                <div className="options-grid">
+          <div className="question-preview">
+            {questions.map((question, index) => (
+              <div key={question.id} className="question-card">
+                <p className="question-number">Q{index + 1}</p>
+                <h3>{question.prompt}</h3>
+                <ul>
                   {question.options.map((option, optionIndex) => (
-                    <input
-                      key={`${question.id}-option-${optionIndex}`}
-                      value={option}
-                      onChange={(event) => updateOption(index, optionIndex, event.target.value)}
-                      placeholder={`Option ${optionIndex + 1}`}
-                    />
+                    <li key={`${question.id}-${optionIndex}`}>
+                      {String.fromCharCode(65 + optionIndex)}. {option}
+                    </li>
                   ))}
-                </div>
+                </ul>
               </div>
             ))}
-          </section>
+          </div>
+        </section>
 
-          <aside className="panel">
-            <h2>Saved tests</h2>
-            {savedTests.length === 0 ? (
-              <p className="empty-state">No tests saved yet.</p>
-            ) : (
-              <ul className="test-list">
-                {savedTests.map((test) => (
-                  <li key={test.id}>
-                    <button
-                      className={selectedTestId === test.id ? 'active' : ''}
-                      onClick={() => {
-                        setSelectedTestId(test.id);
-                        setDraft(test);
-                      }}
-                    >
-                      {test.title}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-
-            <div className="section-block">
-              <h3>Feature status</h3>
-              <p>Teacher workflow: available</p>
-              <p>Student flow: available</p>
-              <p>Persistence: IndexedDB via Dexie</p>
-            </div>
-          </aside>
-        </main>
-      ) : (
-        <main className="layout single-col">
-          <section className="panel student-panel">
-            <h2>Student exam</h2>
-            <label>
-              Test
-              <select
-                value={selectedTestId}
-                onChange={(event) => {
-                  const id = event.target.value;
-                  const selected = savedTests.find((test) => test.id === id);
-                  setSelectedTestId(id);
-                  if (selected) {
-                    setDraft(selected);
-                  }
-                }}
-              >
-                <option value="">Select a test</option>
-                {savedTests.map((test) => (
-                  <option key={test.id} value={test.id}>
-                    {test.title}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label>
-              Student name
-              <input
-                value={studentName}
-                onChange={(event) => setStudentName(event.target.value)}
-                placeholder="Enter your name"
-              />
-            </label>
-
-            {draft.questions.map((question, index) => (
-              <div className="question-card" key={question.id}>
-                <p className="question-label">Question {index + 1}</p>
-                <p>{question.prompt || 'Question text pending'}</p>
-                <div className="options-stack">
+        <section className="panel">
+          <h2>Student exam</h2>
+          {questions.length === 0 ? (
+            <p>No questions loaded yet.</p>
+          ) : (
+            <div className="student-questions">
+              {questions.map((question, index) => (
+                <div key={question.id} className="student-question">
+                  <p className="question-number">Question {index + 1}</p>
+                  <h3>{question.prompt}</h3>
                   {question.options.map((option, optionIndex) => (
-                    <label key={`${question.id}-${optionIndex}`} className="option-row">
+                    <label key={`${question.id}-option-${optionIndex}`} className="option-row">
                       <input
                         type="radio"
                         name={question.id}
-                        checked={studentAnswers[question.id] === optionIndex}
-                        onChange={() =>
-                          setStudentAnswers((current) => ({
-                            ...current,
-                            [question.id]: optionIndex,
-                          }))
-                        }
+                        checked={answers[question.id] === optionIndex}
+                        onChange={() => handleAnswerChange(question.id, optionIndex)}
                       />
-                      <span>{option || `Option ${optionIndex + 1}`}</span>
+                      <span>
+                        {String.fromCharCode(65 + optionIndex)}. {option}
+                      </span>
                     </label>
                   ))}
                 </div>
-              </div>
-            ))}
+              ))}
 
-            <div className="inline-actions">
-              <button onClick={submitExam}>Submit exam</button>
+              <button onClick={handleSubmit}>Submit attempt</button>
+
+              {result && (
+                <div className="result-box">
+                  <strong>Score:</strong> {result.score} / {result.total}
+                </div>
+              )}
             </div>
-
-            {result && (
-              <div className="result-box">
-                <h3>Result</h3>
-                <p>
-                  Score: {result.score} / {result.total}
-                </p>
-                <p>Result code: {result.code}</p>
-              </div>
-            )}
-          </section>
-        </main>
-      )}
+          )}
+        </section>
+      </main>
     </div>
   );
 }
-
-export default App;
