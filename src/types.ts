@@ -1,23 +1,20 @@
 export type Question = {
   id: string;
-  /** Text exactly as imported/edited by the teacher; never Unicode-normalized. */
+  /** Keep exactly the text entered or pasted by the teacher. */
   prompt: string;
-  /** Preserve original option line text, including its visible marker when present. */
+  /** Keep each option exactly as entered by the teacher. */
   options: string[];
-  /** Null means the teacher has not supplied an answer. */
-  correctIndex: number | null;
-  /** Teacher-authored only; empty unless explicitly entered. */
-  explanation: string;
   source: 'manual' | 'paste' | 'pdf' | 'ocr';
 };
 
 export type TestRecord = {
   id: string;
   title: string;
+  description: string;
   language: 'en' | 'hi';
-  timeLimitMinutes: number;
+  durationMinutes: number;
   questions: Question[];
-  /** Only explicitly supplied teacher answers are stored here. */
+  /** Private teacher data; never include this field in a student payload. */
   answerKey: Record<string, number>;
   createdAt: number;
   updatedAt: number;
